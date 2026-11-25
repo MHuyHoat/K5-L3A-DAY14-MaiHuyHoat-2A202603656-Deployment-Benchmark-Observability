@@ -1,0 +1,41 @@
+name: eval-quality-gate
+
+# Chặn merge khi agent tệ đi: run_eval.py trả exit code 1 nếu accuracy dưới
+# ngưỡng hoặc có câu bị regression so với baseline đã commit.
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r 06-lab-complete/benchmark-observability/develop/requirements.txt
+
+      - name: Start agent v2 on port 8002
+        run: |
+          cd 06-lab-complete/benchmark-observability/develop
+          AGENT_VERSION=v2 PORT=8002 nohup python app.py > /tmp/agent.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8002/health && break
+            sleep 1
+          done
+          curl -sf http://localhost:8002/health
+
+      - name: Quality gate (accuracy 100%, không regression)
+        run: |
+          cd 06-lab-complete/benchmark-observability/develop
+          python eval/run_eval.py --url http://localhost:8002 \
+            --min-accuracy 1.0 \
+            --baseline reports/eval_v2.json \
+            --out reports/eval_ci.json
+
+      - name: Show agent log if the gate failed
+        if: failure()
+        run: tail -50 /tmp/agent.log
